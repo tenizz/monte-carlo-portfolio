@@ -27,6 +27,7 @@ simulations = int(input("Enter number of simulations, example 5000: "))
 
 trading_days = 252
 risk_free_rate = 0.04  # 4%
+inflation_rate = 0.03 # 3%
 
 print()
 print("Return assumption mode:")
@@ -120,6 +121,7 @@ final_values = portfolio_results[-1, :]
 
 mean_final = float(np.mean(final_values))
 median_final = float(np.median(final_values))
+real_median_final = median_final / ((1 + inflation_rate) ** years)
 percentile_5 = float(np.percentile(final_values, 5))
 percentile_95 = float(np.percentile(final_values, 95))
 
@@ -155,6 +157,7 @@ print("Simulation Results")
 print("--------------------------------")
 print(f"Mean final value: ${mean_final:,.2f}")
 print(f"Median final value: ${median_final:,.2f}")
+print(f"Inflation-adjusted median value: ${real_median_final:,.2f}")
 print(f"5th percentile: ${percentile_5:,.2f}")
 print(f"CVaR 5%: ${cvar_5:,.2f}")
 print(f"95th percentile: ${percentile_95:,.2f}")
