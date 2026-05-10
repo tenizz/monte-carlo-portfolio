@@ -7,16 +7,33 @@ import yfinance as yf
 # 1. User settings
 # -----------------------------
 
-tickers = ["AAPL", "MSFT", "SPY"]
-weights = np.array([0.3, 0.3, 0.4])
+tickers_input = input("Enter stock tickers separated by commas, example AAPL,MSFT,SPY: ")
+tickers = [ticker.strip().upper() for ticker in tickers_input.split(",")]
 
-initial_investment = 10000
-monthly_contribution = 300
+weights_input = input("Enter portfolio weights separated by commas, example 0.3,0.3,0.4: ")
+weights = np.array([float(weight.strip()) for weight in weights_input.split(",")])
 
-years = 10
-simulations = 5000
+if len(tickers) != len(weights):
+    raise ValueError("Number of tickers must match number of weights.")
+
+if not np.isclose(weights.sum(), 1):
+    raise ValueError("Weights must add up to 1. Example: 0.3 + 0.3 + 0.4 = 1")
+
+initial_investment = float(input("Enter initial investment amount: "))
+monthly_contribution = float(input("Enter monthly contribution amount: "))
+
+years = int(input("Enter number of years to simulate: "))
+simulations = int(input("Enter number of simulations, example 5000: "))
+
 trading_days = 252
 risk_free_rate = 0.04  # 4%
+
+print()
+print("Return assumption mode:")
+print("1 = Historical returns (optimistic, based on past data)")
+print("2 = Conservative return assumption (more realistic long-term planning)")
+
+mode = input("Choose mode, 1 or 2: ")
 
 # -----------------------------
 # 2. Download historical data
@@ -27,6 +44,22 @@ daily_returns = data.pct_change().dropna()
 
 mean_returns = daily_returns.mean()
 cov_matrix = daily_returns.cov()
+
+if mode == "2":
+    conservative_annual_return = 0.08
+    conservative_daily_return = (1 + conservative_annual_return) ** (1 / trading_days) - 1
+
+    mean_returns = pd.Series(
+        [conservative_daily_return] * len(tickers),
+        index=tickers
+    )
+
+    print()
+    print("Using conservative mode:")
+    print("Expected annual return set to 8%")
+else:
+    print()
+    print("Using historical return mode")
 
 # -----------------------------
 # 3. Portfolio statistics
@@ -89,6 +122,7 @@ mean_final = np.mean(final_values)
 median_final = np.median(final_values)
 percentile_5 = np.percentile(final_values, 5)
 percentile_95 = np.percentile(final_values, 95)
+cvar_5 = final_values[final_values <= percentile_5].mean()
 prob_loss = np.mean(final_values < initial_investment)
 
 total_contributions = initial_investment + monthly_contribution * years * 12
@@ -121,6 +155,7 @@ print("--------------------------------")
 print(f"Mean final value: ${mean_final:,.2f}")
 print(f"Median final value: ${median_final:,.2f}")
 print(f"5th percentile: ${percentile_5:,.2f}")
+print(f"CVaR 5%: ${cvar_5:,.2f}")
 print(f"95th percentile: ${percentile_95:,.2f}")
 print(f"Probability final value is below initial investment: {prob_loss:.2%}")
 print(f"Probability final value is below total contributions: {prob_below_contributions:.2%}")
@@ -145,6 +180,7 @@ plt.hist(final_values, bins=50)
 plt.axvline(median_final, linestyle="--", label="Median")
 plt.axvline(percentile_5, linestyle="--", label="5th percentile")
 plt.axvline(percentile_95, linestyle="--", label="95th percentile")
+plt.axvline(cvar_5, linestyle=":", label="CVaR 5%")
 plt.title("Distribution of Final Portfolio Values")
 plt.xlabel("Final Portfolio Value ($)")
 plt.ylabel("Frequency")
