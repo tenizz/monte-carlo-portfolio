@@ -118,11 +118,11 @@ for sim in range(simulations):
 
 final_values = portfolio_results[-1, :]
 
-mean_final = np.mean(final_values)
-median_final = np.median(final_values)
-percentile_5 = np.percentile(final_values, 5)
-percentile_95 = np.percentile(final_values, 95)
-cvar_5 = final_values[final_values <= percentile_5].mean()
+mean_final = float(np.mean(final_values))
+median_final = float(np.median(final_values))
+percentile_5 = float(np.percentile(final_values, 5))
+percentile_95 = float(np.percentile(final_values, 95))
+cvar_5 = float(final_values[final_values <= percentile_5].mean())
 prob_loss = np.mean(final_values < initial_investment)
 
 total_contributions = initial_investment + monthly_contribution * years * 12
@@ -177,10 +177,10 @@ plt.show()
 
 plt.figure(figsize=(10, 6))
 plt.hist(final_values, bins=50)
-plt.axvline(float(median_final), linestyle="--", label="Median")
-plt.axvline(float(percentile_5), linestyle="--", label="5th percentile")
-plt.axvline(float(percentile_95), linestyle="--", label="95th percentile")
-plt.axvline(float(cvar_5), linestyle=":", label="CVaR 5%")
+plt.axvline(median_final, linestyle="--", label="Median")
+plt.axvline(percentile_5, linestyle="--", label="5th percentile")
+plt.axvline(percentile_95, linestyle="--", label="95th percentile")
+plt.axvline(cvar_5, linestyle=":", label="CVaR 5%")
 plt.title("Distribution of Final Portfolio Values")
 plt.xlabel("Final Portfolio Value ($)")
 plt.ylabel("Frequency")
