@@ -122,7 +122,8 @@ mean_final = float(np.mean(final_values))
 median_final = float(np.median(final_values))
 percentile_5 = float(np.percentile(final_values, 5))
 percentile_95 = float(np.percentile(final_values, 95))
-cvar_5 = float(final_values[final_values <= percentile_5].mean())
+
+cvar_5 = float(np.asarray(final_values[final_values <= percentile_5]).mean())
 prob_loss = np.mean(final_values < initial_investment)
 
 total_contributions = initial_investment + monthly_contribution * years * 12
