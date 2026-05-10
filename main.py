@@ -132,6 +132,53 @@ total_contributions = initial_investment + monthly_contribution * years * 12
 prob_below_contributions = np.mean(final_values < total_contributions)
 
 # -----------------------------
+# Efficient Frontier
+# -----------------------------
+
+num_random_portfolios = 10000
+
+frontier_returns = []
+frontier_volatility = []
+frontier_sharpe = []
+frontier_weights = []
+
+for _ in range(num_random_portfolios):
+
+    random_weights = np.random.random(len(tickers))
+    random_weights = random_weights / np.sum(random_weights)
+
+    random_daily_return = np.sum(mean_returns * random_weights)
+
+    random_annual_return = (
+                                   (1 + random_daily_return) ** trading_days
+                           ) - 1
+
+    random_annual_volatility = (
+            np.sqrt(random_weights.T @ cov_matrix @ random_weights)
+            * np.sqrt(trading_days)
+    )
+
+    random_sharpe = (
+            (random_annual_return - risk_free_rate)
+            / random_annual_volatility
+    )
+
+    frontier_returns.append(random_annual_return)
+    frontier_volatility.append(random_annual_volatility)
+    frontier_sharpe.append(random_sharpe)
+    frontier_weights.append(random_weights)
+
+frontier_returns = np.array(frontier_returns)
+frontier_volatility = np.array(frontier_volatility)
+frontier_sharpe = np.array(frontier_sharpe)
+
+max_sharpe_index = np.argmax(frontier_sharpe)
+min_volatility_index = np.argmin(frontier_volatility)
+
+max_sharpe_weights = frontier_weights[max_sharpe_index]
+min_volatility_weights = frontier_weights[min_volatility_index]
+
+# -----------------------------
 # 6. Print results
 # -----------------------------
 
@@ -164,6 +211,20 @@ print(f"95th percentile: ${percentile_95:,.2f}")
 print(f"Probability final value is below initial investment: {prob_loss:.2%}")
 print(f"Probability final value is below total contributions: {prob_below_contributions:.2%}")
 
+
+print()
+print("Efficient Frontier Results")
+print("--------------------------------")
+
+print("Maximum Sharpe Ratio Portfolio:")
+for ticker, weight in zip(tickers, max_sharpe_weights):
+    print(f"{ticker}: {weight:.2%}")
+
+print()
+
+print("Minimum Volatility Portfolio:")
+for ticker, weight in zip(tickers, min_volatility_weights):
+    print(f"{ticker}: {weight:.2%}")
 # -----------------------------
 # 7. Plot simulations
 # -----------------------------
@@ -200,4 +261,42 @@ plt.plot(drawdown)
 plt.title("Historical Portfolio Drawdown")
 plt.xlabel("Date")
 plt.ylabel("Drawdown")
+plt.show()
+
+# -----------------------------
+# Efficient Frontier Plot
+# -----------------------------
+
+plt.figure(figsize=(10, 6))
+
+scatter = plt.scatter(
+    frontier_volatility,
+    frontier_returns,
+    c=frontier_sharpe
+)
+
+plt.scatter(
+    frontier_volatility[max_sharpe_index],
+    frontier_returns[max_sharpe_index],
+    marker="*",
+    s=300,
+    label="Max Sharpe Portfolio"
+)
+
+plt.scatter(
+    frontier_volatility[min_volatility_index],
+    frontier_returns[min_volatility_index],
+    marker="*",
+    s=300,
+    label="Min Volatility Portfolio"
+)
+
+plt.title("Efficient Frontier")
+plt.xlabel("Annualized Volatility")
+plt.ylabel("Annualized Return")
+
+plt.colorbar(scatter, label="Sharpe Ratio")
+
+plt.legend()
+
 plt.show()
