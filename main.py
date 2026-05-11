@@ -184,6 +184,33 @@ total_contributions = initial_investment + monthly_contribution * years * 12
 prob_below_contributions = np.mean(final_values < total_contributions)
 
 # -----------------------------
+# Summary Table
+# -----------------------------
+
+summary_table = pd.DataFrame({
+    "Metric": [
+        "Mean Final Value",
+        "Median Final Value",
+        "Inflation-Adjusted Median",
+        "5th Percentile / VaR 5%",
+        "CVaR 5%",
+        "95th Percentile",
+        "Probability Below Initial Investment",
+        "Probability Below Total Contributions"
+    ],
+    "Value": [
+        f"${mean_final:,.2f}",
+        f"${median_final:,.2f}",
+        f"${real_median_final:,.2f}",
+        f"${percentile_5:,.2f}",
+        f"${cvar_5:,.2f}",
+        f"${percentile_95:,.2f}",
+        f"{prob_loss:.2%}",
+        f"{prob_below_contributions:.2%}"
+    ]
+})
+
+# -----------------------------
 # Efficient Frontier
 # -----------------------------
 
@@ -256,14 +283,7 @@ print()
 print("Simulation Results")
 print()
 print("--------------------------------")
-print(f"Mean final value: ${mean_final:,.2f}")
-print(f"Median final value: ${median_final:,.2f}")
-print(f"Inflation-adjusted median value: ${real_median_final:,.2f}")
-print(f"5th percentile: ${percentile_5:,.2f}")
-print(f"CVaR 5%: ${cvar_5:,.2f}")
-print(f"95th percentile: ${percentile_95:,.2f}")
-print(f"Probability final value is below initial investment: {prob_loss:.2%}")
-print(f"Probability final value is below total contributions: {prob_below_contributions:.2%}")
+print(summary_table.to_string(index=False))
 print("Stress Test")
 print("--------------------------------")
 print(f"Median value after immediate 30% crash: ${stressed_median:,.2f}")
