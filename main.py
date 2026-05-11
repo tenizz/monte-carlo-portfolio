@@ -162,6 +162,11 @@ for sim in range(simulations):
 # -----------------------------
 
 final_values = portfolio_results[-1, :]
+final_values_table = pd.DataFrame({
+    "Final Portfolio Values": final_values
+})
+
+final_values_table.to_csv("final_values.csv", index=False)
 
 mean_final = float(np.mean(final_values))
 median_final = float(np.median(final_values))
@@ -210,6 +215,8 @@ summary_table = pd.DataFrame({
     ]
 })
 
+summary_table.to_csv("simulation_summary.csv", index=False)
+
 # -----------------------------
 # Efficient Frontier
 # -----------------------------
@@ -250,6 +257,13 @@ for _ in range(num_random_portfolios):
 frontier_returns = np.array(frontier_returns)
 frontier_volatility = np.array(frontier_volatility)
 frontier_sharpe = np.array(frontier_sharpe)
+frontier_table = pd.DataFrame({
+    "Return": frontier_returns,
+    "Volatility": frontier_volatility,
+    "Sharpe Ratio": frontier_sharpe
+})
+
+frontier_table.to_csv("efficient_frontier.csv", index=False)
 
 max_sharpe_index = np.argmax(frontier_sharpe)
 min_volatility_index = np.argmin(frontier_volatility)
