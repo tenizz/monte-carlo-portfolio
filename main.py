@@ -83,6 +83,30 @@ drawdown = (historical_growth - running_max) / running_max
 max_drawdown = drawdown.min()
 
 # -----------------------------
+# CAPM Beta vs SPY
+# -----------------------------
+
+benchmark = yf.download(
+    "SPY",
+    start="2015-01-01"
+)["Close"]
+
+benchmark_returns = benchmark.pct_change().dropna()
+
+aligned_returns = pd.concat(
+    [historical_portfolio_returns, benchmark_returns],
+    axis=1
+).dropna()
+
+aligned_returns.columns = ["Portfolio", "SPY"]
+
+cov_with_market = aligned_returns.cov().loc["Portfolio", "SPY"]
+
+market_variance = aligned_returns["SPY"].var()
+
+beta = float(cov_with_market / market_variance)
+
+# -----------------------------
 # 4. Monte Carlo simulation
 # -----------------------------
 
@@ -199,6 +223,7 @@ print(f"Annualized return: {annualized_return:.2%}")
 print(f"Annualized volatility: {annualized_volatility:.2%}")
 print(f"Sharpe ratio: {sharpe_ratio:.2f}")
 print(f"Max drawdown: {max_drawdown:.2%}")
+print(f"CAPM beta vs SPY: {beta:.2f}")
 print()
 print("Simulation Results")
 print("--------------------------------")
@@ -225,6 +250,7 @@ print()
 print("Minimum Volatility Portfolio:")
 for ticker, weight in zip(tickers, min_volatility_weights):
     print(f"{ticker}: {weight:.2%}")
+
 # -----------------------------
 # 7. Plot simulations
 # -----------------------------
