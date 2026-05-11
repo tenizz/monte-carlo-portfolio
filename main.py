@@ -326,6 +326,7 @@ plt.plot(portfolio_results[:, :100])
 plt.title("Monte Carlo Portfolio Simulation")
 plt.xlabel("Trading Days")
 plt.ylabel("Portfolio Value ($)")
+plt.savefig("monte_carlo_simulation.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 # -----------------------------
@@ -342,6 +343,7 @@ plt.title("Distribution of Final Portfolio Values")
 plt.xlabel("Final Portfolio Value ($)")
 plt.ylabel("Frequency")
 plt.legend()
+plt.savefig("final_value_distribution.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 # -----------------------------
@@ -353,6 +355,7 @@ plt.plot(drawdown)
 plt.title("Historical Portfolio Drawdown")
 plt.xlabel("Date")
 plt.ylabel("Drawdown")
+plt.savefig("historical_drawdown.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 # -----------------------------
@@ -390,5 +393,5 @@ plt.ylabel("Annualized Return")
 plt.colorbar(scatter, label="Sharpe Ratio")
 
 plt.legend()
-
+plt.savefig("efficient_frontier.png", dpi=300, bbox_inches="tight")
 plt.show()
