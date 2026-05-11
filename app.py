@@ -98,3 +98,88 @@ if run_button:
 
     st.write("### Daily Returns Preview")
     st.dataframe(daily_returns.tail())
+    # Monte Carlo Engine
+    mean_returns = daily_returns.mean()
+    cov_matrix = daily_returns.cov()
+
+    trading_days = 252
+
+    if mode == "Conservative 8% return simulation":
+        conservative_annual_return = 0.08
+
+        conservative_daily_return = (
+                                            (1 + conservative_annual_return) ** (1 / trading_days)
+                                    ) - 1
+
+        mean_returns = pd.Series(
+            [conservative_daily_return] * len(tickers),
+            index=tickers
+        )
+
+    days = years * trading_days
+
+    portfolio_results = np.zeros((days, simulations))
+
+    for sim in range(simulations):
+
+        if mode == "Bootstrap historical simulation":
+
+            sampled_returns = daily_returns.sample(
+                n=days,
+                replace=True,
+                ignore_index=True
+            )
+
+            portfolio_daily_returns = (
+                    sampled_returns.to_numpy() @ weights
+            )
+
+        else:
+
+            simulated_returns = np.random.multivariate_normal(
+                mean_returns,
+                cov_matrix,
+                days
+            )
+
+            portfolio_daily_returns = (
+                    simulated_returns @ weights
+            )
+
+        portfolio_value = initial_investment
+
+        values = []
+
+        for day in range(days):
+
+            daily_growth = 1 + float(portfolio_daily_returns[day])
+
+            daily_growth = max(0, daily_growth)
+
+            portfolio_value *= daily_growth
+
+            if day % 21 == 0 and day != 0:
+                portfolio_value += monthly_contribution
+
+            values.append(portfolio_value)
+
+        portfolio_results[:, sim] = values
+
+    final_values = portfolio_results[-1, :]
+
+    median_final = float(np.median(final_values))
+    mean_final = float(np.mean(final_values))
+    percentile_5 = float(np.percentile(final_values, 5))
+    percentile_95 = float(np.percentile(final_values, 95))
+
+    st.write("## Simulation Results")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Median Final Value", f"${median_final:,.2f}")
+        st.metric("5th Percentile", f"${percentile_5:,.2f}")
+
+    with col2:
+        st.metric("Mean Final Value", f"${mean_final:,.2f}")
+        st.metric("95th Percentile", f"${percentile_95:,.2f}")
