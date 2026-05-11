@@ -72,3 +72,29 @@ if run_button:
     st.write(f"Years: {years}")
     st.write(f"Simulations: {simulations}")
     st.write(f"Mode: {mode}")
+    import numpy as np
+    import pandas as pd
+    import yfinance as yf
+
+    tickers = [ticker.strip().upper() for ticker in tickers_input.split(",")]
+    weights = np.array([float(weight.strip()) for weight in weights_input.split(",")])
+
+    if len(tickers) != len(weights):
+        st.error("Number of tickers must match number of weights.")
+        st.stop()
+
+    if not np.isclose(weights.sum(), 1):
+        st.error("Portfolio weights must add up to 1.")
+        st.stop()
+
+    with st.spinner("Downloading historical market data..."):
+        data = yf.download(tickers, start="2015-01-01")["Close"]
+        daily_returns = data.pct_change().dropna()
+
+    st.success("Market data downloaded successfully.")
+
+    st.write("### Historical Price Data")
+    st.line_chart(data)
+
+    st.write("### Daily Returns Preview")
+    st.dataframe(daily_returns.tail())
