@@ -183,3 +183,23 @@ if run_button:
     with col2:
         st.metric("Mean Final Value", f"${mean_final:,.2f}")
         st.metric("95th Percentile", f"${percentile_95:,.2f}")
+
+        st.write("## Simulation Charts")
+
+    # Monte Carlo simulation paths
+    simulation_chart_data = pd.DataFrame(
+        portfolio_results[:, :100]
+    )
+
+    st.write("### Monte Carlo Portfolio Paths")
+    st.line_chart(simulation_chart_data)
+
+    # Final value distribution
+    final_values_table = pd.DataFrame({
+        "Final Portfolio Value": final_values
+    })
+
+    st.write("### Distribution of Final Portfolio Values")
+    st.bar_chart(
+        final_values_table["Final Portfolio Value"].value_counts(bins=50).sort_index()
+    )
