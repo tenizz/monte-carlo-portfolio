@@ -31,10 +31,11 @@ inflation_rate = 0.03 # 3%
 
 print()
 print("Return assumption mode:")
-print("1 = Historical returns (optimistic, based on past data)")
-print("2 = Conservative return assumption (more realistic long-term planning)")
+print("1 = Historical normal simulation")
+print("2 = Conservative 8% return simulation")
+print("3 = Bootstrap historical simulation")
 
-mode = input("Choose mode, 1 or 2: ")
+mode = input("Choose mode, 1, 2, or 3: ")
 
 # -----------------------------
 # 2. Download historical data
@@ -58,9 +59,12 @@ if mode == "2":
     print()
     print("Using conservative mode:")
     print("Expected annual return set to 8%")
+elif mode == "3":
+    print()
+    print("Using bootstrap historical simulation mode")
 else:
     print()
-    print("Using historical return mode")
+    print("Using historical normal simulation mode")
 
 # -----------------------------
 # 3. Portfolio statistics
@@ -116,19 +120,35 @@ portfolio_results = np.zeros((days, simulations))
 monthly_contribution_days = 21
 
 for sim in range(simulations):
-    simulated_returns = np.random.multivariate_normal(
-        mean_returns,
-        cov_matrix,
-        days
-    )
 
-    portfolio_daily_returns = simulated_returns @ weights
+    if mode == "3":
+        sampled_returns = daily_returns.sample(
+            n=days,
+            replace=True,
+            ignore_index=True
+        )
+
+        portfolio_daily_returns = sampled_returns.to_numpy() @ weights
+
+    else:
+        simulated_returns = np.random.multivariate_normal(
+            mean_returns,
+            cov_matrix,
+            days
+        )
+
+        portfolio_daily_returns = simulated_returns @ weights
 
     portfolio_value = initial_investment
     values = []
 
     for day in range(days):
-        portfolio_value = portfolio_value * (1 + portfolio_daily_returns[day])
+        daily_growth = 1 + float(portfolio_daily_returns[day])
+
+        # Prevent impossible return below -100%
+        daily_growth = max(0, daily_growth)
+
+        portfolio_value = portfolio_value * daily_growth
 
         if day % monthly_contribution_days == 0 and day != 0:
             portfolio_value += monthly_contribution
@@ -235,9 +255,6 @@ print(f"CAPM beta vs SPY: {beta:.2f}")
 print()
 print("Simulation Results")
 print()
-print("Stress Test")
-print("--------------------------------")
-print(f"Median value after immediate 30% crash: ${stressed_median:,.2f}")
 print("--------------------------------")
 print(f"Mean final value: ${mean_final:,.2f}")
 print(f"Median final value: ${median_final:,.2f}")
@@ -247,6 +264,9 @@ print(f"CVaR 5%: ${cvar_5:,.2f}")
 print(f"95th percentile: ${percentile_95:,.2f}")
 print(f"Probability final value is below initial investment: {prob_loss:.2%}")
 print(f"Probability final value is below total contributions: {prob_below_contributions:.2%}")
+print("Stress Test")
+print("--------------------------------")
+print(f"Median value after immediate 30% crash: ${stressed_median:,.2f}")
 
 
 print()
