@@ -146,6 +146,14 @@ final_values = portfolio_results[-1, :]
 mean_final = float(np.mean(final_values))
 median_final = float(np.median(final_values))
 real_median_final = median_final / ((1 + inflation_rate) ** years)
+# -----------------------------
+# Stress Test Scenario
+# -----------------------------
+
+crash_size = 0.30
+
+stressed_median = median_final * (1 - crash_size)
+
 percentile_5 = float(np.percentile(final_values, 5))
 percentile_95 = float(np.percentile(final_values, 95))
 
@@ -226,6 +234,10 @@ print(f"Max drawdown: {max_drawdown:.2%}")
 print(f"CAPM beta vs SPY: {beta:.2f}")
 print()
 print("Simulation Results")
+print()
+print("Stress Test")
+print("--------------------------------")
+print(f"Median value after immediate 30% crash: ${stressed_median:,.2f}")
 print("--------------------------------")
 print(f"Mean final value: ${mean_final:,.2f}")
 print(f"Median final value: ${median_final:,.2f}")
