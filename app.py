@@ -3,15 +3,15 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from portfolio_engine import (
+    prepare_mean_returns,
     run_monte_carlo_simulation,
     calculate_efficient_frontier,
-    calculate_simulation_metrics
+    calculate_simulation_metrics,
 )
 
-@st.cache_data
-def download_price_data(tickers):
-    data = yf.download(tickers, start="2015-01-01")["Close"]
-    return data
+# ------------------------------------------------------------------
+# Page config
+# ------------------------------------------------------------------
 
 st.set_page_config(
     page_title="Monte Carlo Portfolio Simulator",
@@ -19,30 +19,49 @@ st.set_page_config(
 )
 
 st.title("Monte Carlo Portfolio Simulator")
-st.write("Analyze portfolio risk, return, downside scenarios, and future outcomes.")
+st.caption("Analyze portfolio risk, return, downside scenarios, and future outcomes.")
 
+
+# ------------------------------------------------------------------
+# Cached data download
+# ------------------------------------------------------------------
+
+@st.cache_data
+def download_price_data(tickers_tuple):
+    # Accepts a tuple so it is hashable for st.cache_data
+    tickers = list(tickers_tuple)
+    data = yf.download(tickers, start="2015-01-01")["Close"]
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+    data = data.ffill().dropna()
+    return data
+
+
+# ------------------------------------------------------------------
 # Sidebar inputs
+# ------------------------------------------------------------------
+
 st.sidebar.header("Portfolio Inputs")
 
 tickers_input = st.sidebar.text_input(
-    "Stock tickers",
+    "Stock tickers (comma-separated)",
     value="AAPL,MSFT,SPY"
 )
 
 weights_input = st.sidebar.text_input(
-    "Portfolio weights",
+    "Portfolio weights (must sum to 1)",
     value="0.3,0.3,0.4"
 )
 
 initial_investment = st.sidebar.number_input(
-    "Initial investment",
+    "Initial investment ($)",
     min_value=0.0,
     value=10000.0,
     step=500.0
 )
 
 monthly_contribution = st.sidebar.number_input(
-    "Monthly contribution",
+    "Monthly contribution ($)",
     min_value=0.0,
     value=300.0,
     step=50.0
@@ -68,174 +87,213 @@ mode = st.sidebar.selectbox(
     [
         "Historical normal simulation",
         "Conservative 8% return simulation",
-        "Bootstrap historical simulation"
+        "Bootstrap historical simulation",
     ]
 )
 
-run_button = st.sidebar.button("Run Simulation")
+run_button = st.sidebar.button("Run Simulation", type="primary")
+
+# ------------------------------------------------------------------
+# Main logic — only runs when button is pressed
+# ------------------------------------------------------------------
 
 if run_button:
-    st.success("Inputs captured successfully.")
 
-    st.write("### Selected Portfolio")
-    st.write(f"Tickers: {tickers_input}")
-    st.write(f"Weights: {weights_input}")
-    st.write(f"Initial investment: ${initial_investment:,.2f}")
-    st.write(f"Monthly contribution: ${monthly_contribution:,.2f}")
-    st.write(f"Years: {years}")
-    st.write(f"Simulations: {simulations}")
-    st.write(f"Mode: {mode}")
+    # --- Parse and validate inputs ---
+    tickers = [t.strip().upper() for t in tickers_input.split(",")]
 
-    tickers = [ticker.strip().upper() for ticker in tickers_input.split(",")]
-    weights = np.array([float(weight.strip()) for weight in weights_input.split(",")])
+    try:
+        weights = np.array([float(w.strip()) for w in weights_input.split(",")])
+    except ValueError:
+        st.error("Weights must be numbers separated by commas.")
+        st.stop()
 
     if len(tickers) != len(weights):
         st.error("Number of tickers must match number of weights.")
         st.stop()
 
     if not np.isclose(weights.sum(), 1):
-        st.error("Portfolio weights must add up to 1.")
+        st.error(f"Weights must sum to 1. Current sum: {weights.sum():.4f}")
         st.stop()
 
+    # --- Download data ---
     with st.spinner("Downloading historical market data..."):
-        data = download_price_data(tickers)
+        data = download_price_data(tuple(tickers))
 
     if data.empty:
         st.error("No price data found. Check your ticker symbols.")
         st.stop()
 
-    if isinstance(data, pd.Series):
-        data = data.to_frame()
-
-    data = data.ffill().dropna()
-
-    missing_tickers = [ticker for ticker in tickers if ticker not in data.columns]
-
-    if missing_tickers:
-        st.error(f"Missing data for: {', '.join(missing_tickers)}")
+    missing = [t for t in tickers if t not in data.columns]
+    if missing:
+        st.error(f"No data found for: {', '.join(missing)}")
         st.stop()
 
-    daily_returns = data.pct_change().dropna()
+    daily_returns = data[tickers].pct_change().dropna()
 
     if daily_returns.empty:
         st.error("Not enough historical data to calculate returns.")
         st.stop()
 
-    st.success("Market data downloaded successfully.")
-
-    st.write("### Historical Price Data")
-    st.line_chart(data)
-
-    st.write("### Daily Returns Preview")
-    st.dataframe(daily_returns.tail())
-    # Monte Carlo Engine
-    mean_returns = daily_returns.mean()
-    cov_matrix = daily_returns.cov()
+    # --- Prepare simulation inputs (mode logic lives in engine) ---
     trading_days = 252
+    mean_returns = prepare_mean_returns(daily_returns, tickers, mode, trading_days)
+    cov_matrix   = daily_returns.cov()
 
-    if mode == "Conservative 8% return simulation":
-        conservative_annual_return = 0.08
-
-        conservative_daily_return = (
-                                            (1 + conservative_annual_return) ** (1 / trading_days)
-                                    ) - 1
-
-        mean_returns = pd.Series(
-            [conservative_daily_return] * len(tickers),
-            index=tickers
+    # --- Run simulation ---
+    with st.spinner(f"Running {simulations:,} simulations..."):
+        portfolio_results, final_values = run_monte_carlo_simulation(
+            daily_returns=daily_returns,
+            mean_returns=mean_returns,
+            cov_matrix=cov_matrix,
+            weights=weights,
+            initial_investment=initial_investment,
+            monthly_contribution=monthly_contribution,
+            years=years,
+            simulations=simulations,
+            mode=mode,
+            trading_days=trading_days,
         )
 
-    portfolio_results, final_values = run_monte_carlo_simulation(
-        daily_returns=daily_returns,
-        mean_returns=mean_returns,
-        cov_matrix=cov_matrix,
-        weights=weights,
+    # --- Compute metrics (full set, unified with CLI) ---
+    metrics = calculate_simulation_metrics(
+        final_values=final_values,
         initial_investment=initial_investment,
         monthly_contribution=monthly_contribution,
         years=years,
-        simulations=simulations,
-        mode=mode,
-        trading_days=trading_days
     )
 
-    mean_final, median_final, percentile_5, percentile_95, summary_table = (
-        calculate_simulation_metrics(final_values)
-    )
+    # --- Efficient frontier ---
+    with st.spinner("Calculating efficient frontier..."):
+        frontier_df = calculate_efficient_frontier(
+            tickers=tickers,
+            mean_returns=mean_returns,
+            cov_matrix=cov_matrix,
+            risk_free_rate=0.04,
+            trading_days=trading_days,
+            num_random_portfolios=3000,
+        )
 
-    st.write("## Simulation Results")
+    st.success("Simulation complete.")
 
-    col1, col2 = st.columns(2)
+    # ------------------------------------------------------------------
+    # Results — organised into tabs
+    # ------------------------------------------------------------------
 
-    with col1:
-        st.metric("Median Final Value", f"${median_final:,.2f}")
-        st.metric("5th Percentile", f"${percentile_5:,.2f}")
+    tab_results, tab_charts, tab_frontier, tab_data = st.tabs([
+        "Results", "Charts", "Efficient Frontier", "Raw Data & Export"
+    ])
 
-    with col2:
-        st.metric("Mean Final Value", f"${mean_final:,.2f}")
-        st.metric("95th Percentile", f"${percentile_95:,.2f}")
+    # ── Tab 1: Results ──────────────────────────────────────────────
+    with tab_results:
 
-        st.write("## Simulation Charts")
+        st.subheader("Simulation Summary")
+        st.caption(f"Mode: {mode} · {simulations:,} simulations · {years} years")
 
-    # Monte Carlo simulation paths
-    simulation_chart_data = pd.DataFrame(
-        portfolio_results[:, :30]
-    )
+        col1, col2, col3 = st.columns(3)
 
-    st.write("### Monte Carlo Portfolio Paths")
-    st.line_chart(simulation_chart_data)
+        with col1:
+            st.metric("Median Final Value",   f"${metrics['median_final']:,.0f}")
+            st.metric("Inflation-Adj. Median", f"${metrics['real_median']:,.0f}")
+            st.metric("Mean Final Value",      f"${metrics['mean_final']:,.0f}")
 
-    # Final value distribution
-    final_values_table = pd.DataFrame({
-        "Final Portfolio Value": final_values
-    })
+        with col2:
+            st.metric("95th Percentile",  f"${metrics['percentile_95']:,.0f}")
+            st.metric("5th Percentile",   f"${metrics['percentile_5']:,.0f}")
+            st.metric("CVaR 5%",          f"${metrics['cvar_5']:,.0f}")
 
-    st.write("### Distribution of Final Portfolio Values")
-    st.write(final_values_table.describe())
-    st.write("## Efficient Frontier")
+        with col3:
+            st.metric("Prob. of Loss",               f"{metrics['prob_loss']:.1%}")
+            st.metric("Prob. Below Total Invested",  f"{metrics['prob_below_contrib']:.1%}")
+            st.metric("Median After 30% Crash",      f"${metrics['stressed_median']:,.0f}")
 
-    frontier_df = calculate_efficient_frontier(
-        tickers=tickers,
-        mean_returns=mean_returns,
-        cov_matrix=cov_matrix,
-        risk_free_rate=0.04,
-        trading_days=trading_days,
-        num_random_portfolios=1000
-    )
+        st.divider()
+        st.caption(
+            f"Total amount contributed over {years} years: "
+            f"${metrics['total_contributions']:,.0f}"
+        )
 
-    st.write("### Efficient Frontier Scatter Plot")
+        st.subheader("Full Summary Table")
+        st.dataframe(metrics["summary_table"], use_container_width=True, hide_index=True)
 
-    st.scatter_chart(
-        frontier_df,
-        x="Volatility",
-        y="Return",
-        color="Sharpe Ratio"
-    )
+    # ── Tab 2: Charts ───────────────────────────────────────────────
+    with tab_charts:
 
-    st.write("## Download Results")
+        st.subheader("Historical Price Data")
+        st.line_chart(data[tickers])
 
-    summary_csv = summary_table.to_csv(index=False).encode("utf-8")
+        st.subheader("Monte Carlo Simulation Paths (first 50 shown)")
+        st.line_chart(
+            pd.DataFrame(
+                portfolio_results[:, :50],
+                columns=[f"Sim {i+1}" for i in range(50)]
+            )
+        )
 
-    st.download_button(
-        label="Download Simulation Summary CSV",
-        data=summary_csv,
-        file_name="simulation_summary.csv",
-        mime="text/csv"
-    )
+        st.subheader("Distribution of Final Portfolio Values")
+        st.dataframe(
+            pd.DataFrame({"Final Portfolio Value ($)": final_values}).describe(),
+            use_container_width=True
+        )
 
-    frontier_csv = frontier_df.to_csv(index=False).encode("utf-8")
+    # ── Tab 3: Efficient Frontier ───────────────────────────────────
+    with tab_frontier:
 
-    st.download_button(
-        label="Download Efficient Frontier CSV",
-        data=frontier_csv,
-        file_name="efficient_frontier.csv",
-        mime="text/csv"
-    )
+        st.subheader("Efficient Frontier")
+        st.caption("Each point is a randomly sampled portfolio. Color = Sharpe ratio.")
 
-    final_values_csv = final_values_table.to_csv(index=False).encode("utf-8")
+        st.scatter_chart(
+            frontier_df,
+            x="Volatility",
+            y="Return",
+            color="Sharpe Ratio",
+        )
 
-    st.download_button(
-        label="Download Final Values CSV",
-        data=final_values_csv,
-        file_name="final_values.csv",
-        mime="text/csv"
-    )
+        best = frontier_df.loc[frontier_df["Sharpe Ratio"].idxmax()]
+        low_vol = frontier_df.loc[frontier_df["Volatility"].idxmin()]
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.metric("Max Sharpe — Return",     f"{best['Return']:.2%}")
+            st.metric("Max Sharpe — Volatility", f"{best['Volatility']:.2%}")
+            st.metric("Max Sharpe Ratio",        f"{best['Sharpe Ratio']:.2f}")
+        with col_b:
+            st.metric("Min Vol — Return",     f"{low_vol['Return']:.2%}")
+            st.metric("Min Vol — Volatility", f"{low_vol['Volatility']:.2%}")
+            st.metric("Min Vol Sharpe Ratio", f"{low_vol['Sharpe Ratio']:.2f}")
+
+    # ── Tab 4: Raw Data & Export ────────────────────────────────────
+    with tab_data:
+
+        st.subheader("Daily Returns Preview")
+        st.dataframe(daily_returns.tail(10), use_container_width=True)
+
+        st.subheader("Download Results")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.download_button(
+                label="📥 Simulation Summary",
+                data=metrics["summary_table"].to_csv(index=False).encode("utf-8"),
+                file_name="simulation_summary.csv",
+                mime="text/csv",
+            )
+
+        with col2:
+            st.download_button(
+                label="📥 Efficient Frontier",
+                data=frontier_df.to_csv(index=False).encode("utf-8"),
+                file_name="efficient_frontier.csv",
+                mime="text/csv",
+            )
+
+        with col3:
+            st.download_button(
+                label="📥 Final Portfolio Values",
+                data=pd.DataFrame({"Final Portfolio Value": final_values})
+                .to_csv(index=False)
+                .encode("utf-8"),
+                file_name="final_values.csv",
+                mime="text/csv",
+                )

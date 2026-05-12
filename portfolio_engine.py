@@ -1,7 +1,20 @@
 import numpy as np
 import pandas as pd
 
-# Monte Carlo function
+CONSERVATIVE_ANNUAL_RETURN = 0.08
+
+
+def prepare_mean_returns(daily_returns, tickers, mode, trading_days=252):
+    """
+    Return the mean_returns Series appropriate for the chosen simulation mode.
+
+    Keeps mode-specific logic in the engine, not the UI layer.
+    """
+    if mode == "Conservative 8% return simulation":
+        daily_rate = (1 + CONSERVATIVE_ANNUAL_RETURN) ** (1 / trading_days) - 1
+        return pd.Series([daily_rate] * len(tickers), index=tickers)
+    return daily_returns.mean()
+
 
 def run_monte_carlo_simulation(
         daily_returns,
@@ -15,50 +28,94 @@ def run_monte_carlo_simulation(
         mode,
         trading_days=252
 ):
+    """
+    Run a fully vectorized Monte Carlo portfolio simulation.
+
+    Eliminates all Python-level loops by generating the entire
+    (days × simulations) return matrix at once and computing
+    portfolio paths using NumPy cumulative products.
+
+    The monthly contribution math:
+        Let G[t] = cumprod of daily growth factors up to day t.
+        A contribution added at day k compounds to G[t]/G[k] by day t.
+        So total portfolio value at day t is:
+            V[t] = G[t] * (initial_investment
+                           + monthly_contribution * Σ_{k≤t} 1/G[k])
+        where the sum is over contribution days only.
+        This is computed in one pass using np.cumsum.
+
+    Returns
+    -------
+    portfolio_results : np.ndarray, shape (days, simulations)
+    final_values      : np.ndarray, shape (simulations,)
+    """
     days = years * trading_days
-    portfolio_results = np.zeros((days, simulations))
+    rng = np.random.default_rng()
 
-    for sim in range(simulations):
+    # ------------------------------------------------------------------
+    # 1. Generate all returns at once: shape (days, simulations)
+    # ------------------------------------------------------------------
 
-        if mode == "Bootstrap historical simulation":
-            sampled_returns = daily_returns.sample(
-                n=days,
-                replace=True,
-                ignore_index=True
-            )
+    if mode == "Bootstrap historical simulation":
+        # Sample day indices with replacement across all simulations.
+        # Each column is one simulation; cross-asset correlations are
+        # preserved within a day because we sample whole rows.
+        idx = rng.integers(0, len(daily_returns), size=(days, simulations))
+        returns_matrix = daily_returns.to_numpy()[idx]   # (days, sims, assets)
+        portfolio_returns = returns_matrix @ weights      # (days, sims)
 
-            portfolio_daily_returns = sampled_returns.to_numpy() @ weights
+    else:
+        # Draw from the joint multivariate normal for all days and
+        # simulations in a single call.
+        raw = rng.multivariate_normal(
+            mean=mean_returns.to_numpy(),
+            cov=cov_matrix.to_numpy(),
+            size=(days, simulations)
+        )                                                 # (days, sims, assets)
+        portfolio_returns = raw @ weights                 # (days, sims)
 
-        else:
-            simulated_returns = np.random.multivariate_normal(
-                mean_returns,
-                cov_matrix,
-                days
-            )
+    # ------------------------------------------------------------------
+    # 2. Daily growth factors, clipped so portfolio never goes negative
+    # ------------------------------------------------------------------
 
-            portfolio_daily_returns = simulated_returns @ weights
+    growth_factors = np.maximum(0.0, 1.0 + portfolio_returns)  # (days, sims)
 
-        portfolio_value = initial_investment
-        values = []
+    # ------------------------------------------------------------------
+    # 3. Cumulative compound growth: G[t] = prod of g[0..t]
+    # ------------------------------------------------------------------
 
-        for day in range(days):
-            daily_growth = 1 + float(portfolio_daily_returns[day])
-            daily_growth = max(0, daily_growth)
+    G = np.cumprod(growth_factors, axis=0)               # (days, sims)
 
-            portfolio_value *= daily_growth
+    # ------------------------------------------------------------------
+    # 4. Monthly contributions (vectorized)
+    #
+    # Contribution days match the original logic: every 21 trading days,
+    # starting at day 21 (not day 0), added *after* that day's growth.
+    #
+    # Build a sparse (days, sims) matrix that holds 1/G[k] at each
+    # contribution day k, then cumsum along the day axis. At any day t,
+    # cumsum_inv_G[t] = Σ_{k≤t, k is contrib day} 1/G[k].
+    # ------------------------------------------------------------------
 
-            if day % 21 == 0 and day != 0:
-                portfolio_value += monthly_contribution
+    if monthly_contribution > 0:
+        contrib_days = np.arange(21, days, 21)           # [21, 42, 63, ...]
 
-            values.append(portfolio_value)
+        inv_G_sparse = np.zeros((days, simulations))
+        inv_G_sparse[contrib_days] = 1.0 / G[contrib_days]  # (days, sims)
 
-        portfolio_results[:, sim] = values
+        cumsum_inv_G = np.cumsum(inv_G_sparse, axis=0)   # (days, sims)
+
+        portfolio_results = G * (
+                initial_investment + monthly_contribution * cumsum_inv_G
+        )
+    else:
+        portfolio_results = G * initial_investment
 
     final_values = portfolio_results[-1, :]
 
     return portfolio_results, final_values
 
-# Efficient Frontier
+
 def calculate_efficient_frontier(
         tickers,
         mean_returns,
@@ -67,62 +124,112 @@ def calculate_efficient_frontier(
         trading_days=252,
         num_random_portfolios=1000
 ):
-    frontier_returns = []
-    frontier_volatility = []
-    frontier_sharpe = []
+    """
+    Generate random portfolios to approximate the efficient frontier.
 
-    for _ in range(num_random_portfolios):
-        random_weights = np.random.random(len(tickers))
-        random_weights /= np.sum(random_weights)
+    Vectorized: all random weight sets are sampled and annualized
+    in one pass with no Python loop.
+    """
+    rng = np.random.default_rng()
+    n = len(tickers)
 
-        random_daily_return = np.sum(mean_returns * random_weights)
+    # Sample all random weight sets at once: shape (num_portfolios, n_assets)
+    raw_weights = rng.random((num_random_portfolios, n))
+    all_weights = raw_weights / raw_weights.sum(axis=1, keepdims=True)
 
-        random_annual_return = (
-                                       (1 + random_daily_return) ** trading_days
-                               ) - 1
+    # Daily returns for each portfolio: shape (num_portfolios,)
+    daily_ret = all_weights @ mean_returns.to_numpy()
+    annual_ret = (1 + daily_ret) ** trading_days - 1
 
-        random_annual_volatility = (
-                np.sqrt(random_weights.T @ cov_matrix @ random_weights)
-                * np.sqrt(trading_days)
-        )
+    # Annualized volatility: sqrt(w' Σ w) * sqrt(252)
+    # Efficient: compute w' Σ in one matrix multiply, then dot with w row-wise
+    wS = all_weights @ cov_matrix.to_numpy()              # (portfolios, assets)
+    variance = np.einsum("ij,ij->i", wS, all_weights)     # (portfolios,)
+    annual_vol = np.sqrt(variance) * np.sqrt(trading_days)
 
-        random_sharpe = (
-                (random_annual_return - risk_free_rate)
-                / random_annual_volatility
-        )
-
-        frontier_returns.append(random_annual_return)
-        frontier_volatility.append(random_annual_volatility)
-        frontier_sharpe.append(random_sharpe)
+    sharpe = (annual_ret - risk_free_rate) / annual_vol
 
     frontier_df = pd.DataFrame({
-        "Volatility": frontier_volatility,
-        "Return": frontier_returns,
-        "Sharpe Ratio": frontier_sharpe
+        "Volatility": annual_vol,
+        "Return": annual_ret,
+        "Sharpe Ratio": sharpe,
     })
+
+    # Store per-ticker weights so callers can retrieve optimal allocations
+    for i, ticker in enumerate(tickers):
+        frontier_df[f"w_{ticker}"] = all_weights[:, i]
 
     return frontier_df
 
-# Metrics
-def calculate_simulation_metrics(final_values):
-    mean_final = float(np.mean(final_values))
-    median_final = float(np.median(final_values))
-    percentile_5 = float(np.percentile(final_values, 5))
-    percentile_95 = float(np.percentile(final_values, 95))
+
+def calculate_simulation_metrics(
+        final_values,
+        initial_investment,
+        monthly_contribution,
+        years,
+        inflation_rate=0.03
+):
+    """
+    Compute summary statistics from final simulation values.
+
+    Includes CVaR, inflation-adjusted median, probability metrics,
+    and stress test — unified so both CLI and web app use the same engine.
+    """
+    mean_final     = float(np.mean(final_values))
+    median_final   = float(np.median(final_values))
+    percentile_5   = float(np.percentile(final_values, 5))
+    percentile_95  = float(np.percentile(final_values, 95))
+
+    # CVaR: expected value in the worst 5% of outcomes
+    tail_mask = final_values <= percentile_5
+    cvar_5 = float(np.mean(final_values[tail_mask]))
+
+    # Inflation-adjusted median (real purchasing power)
+    real_median = median_final / ((1 + inflation_rate) ** years)
+
+    # Probability of loss metrics
+    total_contributions = initial_investment + monthly_contribution * years * 12
+    prob_loss            = float(np.mean(final_values < initial_investment))
+    prob_below_contrib   = float(np.mean(final_values < total_contributions))
+
+    # Stress test: immediate 30% crash applied to median
+    stressed_median = median_final * 0.70
 
     summary_table = pd.DataFrame({
         "Metric": [
             "Mean Final Value",
             "Median Final Value",
-            "5th Percentile",
-            "95th Percentile"
+            "Inflation-Adjusted Median",
+            "5th Percentile (VaR 5%)",
+            "CVaR 5%",
+            "95th Percentile",
+            "Probability Below Initial Investment",
+            "Probability Below Total Contributions",
+            "Median After 30% Crash (Stress Test)",
         ],
         "Value": [
             f"${mean_final:,.2f}",
             f"${median_final:,.2f}",
+            f"${real_median:,.2f}",
             f"${percentile_5:,.2f}",
-            f"${percentile_95:,.2f}"
+            f"${cvar_5:,.2f}",
+            f"${percentile_95:,.2f}",
+            f"{prob_loss:.2%}",
+            f"{prob_below_contrib:.2%}",
+            f"${stressed_median:,.2f}",
         ]
     })
 
-    return mean_final, median_final, percentile_5, percentile_95, summary_table
+    return {
+        "mean_final":          mean_final,
+        "median_final":        median_final,
+        "real_median":         real_median,
+        "percentile_5":        percentile_5,
+        "percentile_95":       percentile_95,
+        "cvar_5":              cvar_5,
+        "prob_loss":           prob_loss,
+        "prob_below_contrib":  prob_below_contrib,
+        "stressed_median":     stressed_median,
+        "total_contributions": total_contributions,
+        "summary_table":       summary_table,
+    }
