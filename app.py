@@ -28,7 +28,6 @@ st.caption("Analyze portfolio risk, return, downside scenarios, and future outco
 
 @st.cache_data
 def download_price_data(tickers_tuple):
-    # Accepts a tuple so it is hashable for st.cache_data
     tickers = list(tickers_tuple)
     data = yf.download(tickers, start="2015-01-01")["Close"]
     if isinstance(data, pd.Series):
@@ -94,12 +93,12 @@ mode = st.sidebar.selectbox(
 run_button = st.sidebar.button("Run Simulation", type="primary")
 
 # ------------------------------------------------------------------
-# Main logic — only runs when button is pressed
+# Run simulation — only when button pressed, store in session_state
+# so results survive tab switches and download button clicks
 # ------------------------------------------------------------------
 
 if run_button:
 
-    # --- Parse and validate inputs ---
     tickers = [t.strip().upper() for t in tickers_input.split(",")]
 
     try:
@@ -116,7 +115,6 @@ if run_button:
         st.error(f"Weights must sum to 1. Current sum: {weights.sum():.4f}")
         st.stop()
 
-    # --- Download data ---
     with st.spinner("Downloading historical market data..."):
         data = download_price_data(tuple(tickers))
 
@@ -135,12 +133,10 @@ if run_button:
         st.error("Not enough historical data to calculate returns.")
         st.stop()
 
-    # --- Prepare simulation inputs (mode logic lives in engine) ---
     trading_days = 252
     mean_returns = prepare_mean_returns(daily_returns, tickers, mode, trading_days)
     cov_matrix   = daily_returns.cov()
 
-    # --- Run simulation ---
     with st.spinner(f"Running {simulations:,} simulations..."):
         portfolio_results, final_values = run_monte_carlo_simulation(
             daily_returns=daily_returns,
@@ -155,7 +151,6 @@ if run_button:
             trading_days=trading_days,
         )
 
-    # --- Compute metrics (full set, unified with CLI) ---
     metrics = calculate_simulation_metrics(
         final_values=final_values,
         initial_investment=initial_investment,
@@ -163,7 +158,6 @@ if run_button:
         years=years,
     )
 
-    # --- Efficient frontier ---
     with st.spinner("Calculating efficient frontier..."):
         frontier_df = calculate_efficient_frontier(
             tickers=tickers,
@@ -174,126 +168,156 @@ if run_button:
             num_random_portfolios=3000,
         )
 
-    st.success("Simulation complete.")
+    # Build CSV bytes once now — not inside download buttons —
+    # so clicking a button doesn't trigger recomputation
+    summary_csv  = metrics["summary_table"].to_csv(index=False).encode("utf-8")
+    frontier_csv = frontier_df.drop(
+        columns=[c for c in frontier_df.columns if c.startswith("w_")]
+    ).to_csv(index=False).encode("utf-8")
+    values_csv   = pd.DataFrame(
+        {"Final Portfolio Value": final_values}
+    ).to_csv(index=False).encode("utf-8")
 
-    # ------------------------------------------------------------------
-    # Results — organised into tabs
-    # ------------------------------------------------------------------
+    # Store everything — persists across all reruns until next Run click
+    st.session_state["results"] = {
+        "tickers":           tickers,
+        "mode":              mode,
+        "years":             years,
+        "simulations":       simulations,
+        "data":              data,
+        "daily_returns":     daily_returns,
+        "portfolio_results": portfolio_results,
+        "final_values":      final_values,
+        "metrics":           metrics,
+        "frontier_df":       frontier_df,
+        "summary_csv":       summary_csv,
+        "frontier_csv":      frontier_csv,
+        "values_csv":        values_csv,
+    }
 
-    tab_results, tab_charts, tab_frontier, tab_data = st.tabs([
-        "Results", "Charts", "Efficient Frontier", "Raw Data & Export"
-    ])
+# ------------------------------------------------------------------
+# Render UI — reads only from session_state
+# Survives every rerun: tab clicks, download clicks, anything
+# ------------------------------------------------------------------
 
-    # ── Tab 1: Results ──────────────────────────────────────────────
-    with tab_results:
+if "results" not in st.session_state:
+    st.info("Configure your portfolio in the sidebar and press **Run Simulation**.")
+    st.stop()
 
-        st.subheader("Simulation Summary")
-        st.caption(f"Mode: {mode} · {simulations:,} simulations · {years} years")
+r = st.session_state["results"]
+m = r["metrics"]
 
-        col1, col2, col3 = st.columns(3)
+st.success("Simulation complete.")
 
-        with col1:
-            st.metric("Median Final Value",   f"${metrics['median_final']:,.0f}")
-            st.metric("Inflation-Adj. Median", f"${metrics['real_median']:,.0f}")
-            st.metric("Mean Final Value",      f"${metrics['mean_final']:,.0f}")
+tab_results, tab_charts, tab_frontier, tab_data = st.tabs([
+    "Results", "Charts", "Efficient Frontier", "Raw Data & Export"
+])
 
-        with col2:
-            st.metric("95th Percentile",  f"${metrics['percentile_95']:,.0f}")
-            st.metric("5th Percentile",   f"${metrics['percentile_5']:,.0f}")
-            st.metric("CVaR 5%",          f"${metrics['cvar_5']:,.0f}")
+# ── Tab 1: Results ───────────────────────────────────────────────
+with tab_results:
 
-        with col3:
-            st.metric("Prob. of Loss",               f"{metrics['prob_loss']:.1%}")
-            st.metric("Prob. Below Total Invested",  f"{metrics['prob_below_contrib']:.1%}")
-            st.metric("Median After 30% Crash",      f"${metrics['stressed_median']:,.0f}")
+    st.subheader("Simulation Summary")
+    st.caption(
+        f"Mode: {r['mode']} · {r['simulations']:,} simulations · {r['years']} years"
+    )
 
-        st.divider()
-        st.caption(
-            f"Total amount contributed over {years} years: "
-            f"${metrics['total_contributions']:,.0f}"
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Median Final Value",    f"${m['median_final']:,.0f}")
+        st.metric("Inflation-Adj. Median", f"${m['real_median']:,.0f}")
+        st.metric("Mean Final Value",      f"${m['mean_final']:,.0f}")
+
+    with col2:
+        st.metric("95th Percentile", f"${m['percentile_95']:,.0f}")
+        st.metric("5th Percentile",  f"${m['percentile_5']:,.0f}")
+        st.metric("CVaR 5%",         f"${m['cvar_5']:,.0f}")
+
+    with col3:
+        st.metric("Prob. of Loss",              f"{m['prob_loss']:.1%}")
+        st.metric("Prob. Below Total Invested", f"{m['prob_below_contrib']:.1%}")
+        st.metric("Median After 30% Crash",     f"${m['stressed_median']:,.0f}")
+
+    st.divider()
+    st.caption(
+        f"Total contributed over {r['years']} years: "
+        f"${m['total_contributions']:,.0f}"
+    )
+    st.subheader("Full Summary Table")
+    st.dataframe(m["summary_table"], use_container_width=True, hide_index=True)
+
+# ── Tab 2: Charts ────────────────────────────────────────────────
+with tab_charts:
+
+    st.subheader("Historical Price Data")
+    st.line_chart(r["data"][r["tickers"]])
+
+    st.subheader("Monte Carlo Simulation Paths (first 50 shown)")
+    st.line_chart(
+        pd.DataFrame(
+            r["portfolio_results"][:, :50],
+            columns=[f"Sim {i+1}" for i in range(50)]
         )
+    )
 
-        st.subheader("Full Summary Table")
-        st.dataframe(metrics["summary_table"], use_container_width=True, hide_index=True)
+    st.subheader("Distribution of Final Portfolio Values")
+    st.dataframe(
+        pd.DataFrame({"Final Portfolio Value ($)": r["final_values"]}).describe(),
+        use_container_width=True
+    )
 
-    # ── Tab 2: Charts ───────────────────────────────────────────────
-    with tab_charts:
+# ── Tab 3: Efficient Frontier ─────────────────────────────────────
+with tab_frontier:
 
-        st.subheader("Historical Price Data")
-        st.line_chart(data[tickers])
+    st.subheader("Efficient Frontier")
+    st.caption("Each point is a randomly sampled portfolio. Color = Sharpe ratio.")
 
-        st.subheader("Monte Carlo Simulation Paths (first 50 shown)")
-        st.line_chart(
-            pd.DataFrame(
-                portfolio_results[:, :50],
-                columns=[f"Sim {i+1}" for i in range(50)]
-            )
+    plot_df = r["frontier_df"].drop(
+        columns=[c for c in r["frontier_df"].columns if c.startswith("w_")]
+    )
+    st.scatter_chart(plot_df, x="Volatility", y="Return", color="Sharpe Ratio")
+
+    best    = r["frontier_df"].loc[r["frontier_df"]["Sharpe Ratio"].idxmax()]
+    low_vol = r["frontier_df"].loc[r["frontier_df"]["Volatility"].idxmin()]
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.metric("Max Sharpe — Return",     f"{best['Return']:.2%}")
+        st.metric("Max Sharpe — Volatility", f"{best['Volatility']:.2%}")
+        st.metric("Max Sharpe Ratio",        f"{best['Sharpe Ratio']:.2f}")
+    with col_b:
+        st.metric("Min Vol — Return",     f"{low_vol['Return']:.2%}")
+        st.metric("Min Vol — Volatility", f"{low_vol['Volatility']:.2%}")
+        st.metric("Min Vol Sharpe Ratio", f"{low_vol['Sharpe Ratio']:.2f}")
+
+# ── Tab 4: Raw Data & Export ──────────────────────────────────────
+with tab_data:
+
+    st.subheader("Daily Returns Preview")
+    st.dataframe(r["daily_returns"].tail(10), use_container_width=True)
+
+    st.subheader("Download Results")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.download_button(
+            label="📥 Simulation Summary",
+            data=r["summary_csv"],
+            file_name="simulation_summary.csv",
+            mime="text/csv",
         )
-
-        st.subheader("Distribution of Final Portfolio Values")
-        st.dataframe(
-            pd.DataFrame({"Final Portfolio Value ($)": final_values}).describe(),
-            use_container_width=True
+    with col2:
+        st.download_button(
+            label="📥 Efficient Frontier",
+            data=r["frontier_csv"],
+            file_name="efficient_frontier.csv",
+            mime="text/csv",
         )
-
-    # ── Tab 3: Efficient Frontier ───────────────────────────────────
-    with tab_frontier:
-
-        st.subheader("Efficient Frontier")
-        st.caption("Each point is a randomly sampled portfolio. Color = Sharpe ratio.")
-
-        st.scatter_chart(
-            frontier_df,
-            x="Volatility",
-            y="Return",
-            color="Sharpe Ratio",
+    with col3:
+        st.download_button(
+            label="📥 Final Portfolio Values",
+            data=r["values_csv"],
+            file_name="final_values.csv",
+            mime="text/csv",
         )
-
-        best = frontier_df.loc[frontier_df["Sharpe Ratio"].idxmax()]
-        low_vol = frontier_df.loc[frontier_df["Volatility"].idxmin()]
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.metric("Max Sharpe — Return",     f"{best['Return']:.2%}")
-            st.metric("Max Sharpe — Volatility", f"{best['Volatility']:.2%}")
-            st.metric("Max Sharpe Ratio",        f"{best['Sharpe Ratio']:.2f}")
-        with col_b:
-            st.metric("Min Vol — Return",     f"{low_vol['Return']:.2%}")
-            st.metric("Min Vol — Volatility", f"{low_vol['Volatility']:.2%}")
-            st.metric("Min Vol Sharpe Ratio", f"{low_vol['Sharpe Ratio']:.2f}")
-
-    # ── Tab 4: Raw Data & Export ────────────────────────────────────
-    with tab_data:
-
-        st.subheader("Daily Returns Preview")
-        st.dataframe(daily_returns.tail(10), use_container_width=True)
-
-        st.subheader("Download Results")
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.download_button(
-                label="📥 Simulation Summary",
-                data=metrics["summary_table"].to_csv(index=False).encode("utf-8"),
-                file_name="simulation_summary.csv",
-                mime="text/csv",
-            )
-
-        with col2:
-            st.download_button(
-                label="📥 Efficient Frontier",
-                data=frontier_df.to_csv(index=False).encode("utf-8"),
-                file_name="efficient_frontier.csv",
-                mime="text/csv",
-            )
-
-        with col3:
-            st.download_button(
-                label="📥 Final Portfolio Values",
-                data=pd.DataFrame({"Final Portfolio Value": final_values})
-                .to_csv(index=False)
-                .encode("utf-8"),
-                file_name="final_values.csv",
-                mime="text/csv",
-                )
