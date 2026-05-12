@@ -1,5 +1,8 @@
-from portfolio_engine import run_monte_carlo_simulation, calculate_efficient_frontier
-
+from portfolio_engine import (
+    run_monte_carlo_simulation,
+    calculate_efficient_frontier,
+    calculate_simulation_metrics
+)
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -155,24 +158,9 @@ if run_button:
         trading_days=trading_days
     )
 
-    median_final = float(np.median(final_values))
-    mean_final = float(np.mean(final_values))
-    percentile_5 = float(np.percentile(final_values, 5))
-    percentile_95 = float(np.percentile(final_values, 95))
-    summary_table = pd.DataFrame({
-        "Metric": [
-            "Mean Final Value",
-            "Median Final Value",
-            "5th Percentile",
-            "95th Percentile"
-        ],
-        "Value": [
-            f"${mean_final:,.2f}",
-            f"${median_final:,.2f}",
-            f"${percentile_5:,.2f}",
-            f"${percentile_95:,.2f}"
-        ]
-    })
+    mean_final, median_final, percentile_5, percentile_95, summary_table = (
+        calculate_simulation_metrics(final_values)
+    )
 
     st.write("## Simulation Results")
 

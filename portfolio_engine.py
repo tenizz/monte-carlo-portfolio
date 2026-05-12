@@ -102,3 +102,27 @@ def calculate_efficient_frontier(
     })
 
     return frontier_df
+
+# Metrics
+def calculate_simulation_metrics(final_values):
+    mean_final = float(np.mean(final_values))
+    median_final = float(np.median(final_values))
+    percentile_5 = float(np.percentile(final_values, 5))
+    percentile_95 = float(np.percentile(final_values, 95))
+
+    summary_table = pd.DataFrame({
+        "Metric": [
+            "Mean Final Value",
+            "Median Final Value",
+            "5th Percentile",
+            "95th Percentile"
+        ],
+        "Value": [
+            f"${mean_final:,.2f}",
+            f"${median_final:,.2f}",
+            f"${percentile_5:,.2f}",
+            f"${percentile_95:,.2f}"
+        ]
+    })
+
+    return mean_final, median_final, percentile_5, percentile_95, summary_table
