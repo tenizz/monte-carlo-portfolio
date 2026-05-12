@@ -1,12 +1,12 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import yfinance as yf
 from portfolio_engine import (
     run_monte_carlo_simulation,
     calculate_efficient_frontier,
     calculate_simulation_metrics
 )
-import streamlit as st
-import numpy as np
-import pandas as pd
-import yfinance as yf
 
 @st.cache_data
 def download_price_data(tickers):
