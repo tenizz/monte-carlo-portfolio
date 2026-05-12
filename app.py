@@ -2,6 +2,8 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import plotly.graph_objects as go
+import plotly.express as px
 from portfolio_engine import (
     prepare_mean_returns,
     run_monte_carlo_simulation,
@@ -250,21 +252,84 @@ with tab_results:
 with tab_charts:
 
     st.subheader("Historical Price Data")
-    st.line_chart(r["data"][r["tickers"]])
 
-    st.subheader("Monte Carlo Simulation Paths (first 50 shown)")
-    st.line_chart(
-        pd.DataFrame(
-            r["portfolio_results"][:, :50],
-            columns=[f"Sim {i+1}" for i in range(50)]
-        )
+    # Normalise to 100 so tickers with different prices are comparable
+    price_data = r["data"][r["tickers"]]
+    normalised = price_data / price_data.iloc[0] * 100
+
+    fig_price = px.line(
+        normalised,
+        labels={"value": "Normalised Value (base 100)", "index": "Date"},
+        title="Historical Price (Normalised to 100)",
     )
+    fig_price.update_traces(line=dict(width=1.5))
+    fig_price.update_layout(legend_title_text="Ticker", hovermode="x unified")
+    st.plotly_chart(fig_price, use_container_width=True)
+
+    st.subheader("Monte Carlo Simulation Paths")
+
+    # Downsample: target ~500 points per path to keep the browser fast
+    total_days = r["portfolio_results"].shape[0]
+    step       = max(1, total_days // 500)
+    n_paths    = 40
+    paths      = r["portfolio_results"][::step, :n_paths]
+
+    fig_mc = go.Figure()
+    for i in range(n_paths):
+        fig_mc.add_trace(go.Scatter(
+            y=paths[:, i],
+            mode="lines",
+            line=dict(width=0.6),
+            opacity=0.4,
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+    # Overlay median path
+    median_path = np.median(r["portfolio_results"][::step, :], axis=1)
+    fig_mc.add_trace(go.Scatter(
+        y=median_path,
+        mode="lines",
+        line=dict(width=2, color="white", dash="dash"),
+        name="Median",
+    ))
+
+    fig_mc.update_layout(
+        title=f"{n_paths} Simulation Paths (1-in-{step} days shown)",
+        xaxis_title="Sampled Trading Days",
+        yaxis_title="Portfolio Value ($)",
+        hovermode="x",
+    )
+    st.plotly_chart(fig_mc, use_container_width=True)
 
     st.subheader("Distribution of Final Portfolio Values")
-    st.dataframe(
-        pd.DataFrame({"Final Portfolio Value ($)": r["final_values"]}).describe(),
-        use_container_width=True
+
+    fv = r["final_values"]
+    m  = r["metrics"]
+
+    fig_hist = go.Figure()
+    fig_hist.add_trace(go.Histogram(x=fv, nbinsx=60, name="Simulations", opacity=0.75))
+
+    for value, label, color in [
+        (m["median_final"],  "Median",         "white"),
+        (m["percentile_5"],  "5th Percentile", "red"),
+        (m["percentile_95"], "95th Percentile","green"),
+        (m["cvar_5"],        "CVaR 5%",        "orange"),
+    ]:
+        fig_hist.add_vline(
+            x=value,
+            line_dash="dash",
+            line_color=color,
+            annotation_text=label,
+            annotation_position="top",
+        )
+
+    fig_hist.update_layout(
+        title="Distribution of Final Portfolio Values",
+        xaxis_title="Final Portfolio Value ($)",
+        yaxis_title="Frequency",
     )
+    st.plotly_chart(fig_hist, use_container_width=True)
 
 # ── Tab 3: Efficient Frontier ─────────────────────────────────────
 with tab_frontier:
@@ -272,13 +337,55 @@ with tab_frontier:
     st.subheader("Efficient Frontier")
     st.caption("Each point is a randomly sampled portfolio. Color = Sharpe ratio.")
 
-    plot_df = r["frontier_df"].drop(
-        columns=[c for c in r["frontier_df"].columns if c.startswith("w_")]
-    )
-    st.scatter_chart(plot_df, x="Volatility", y="Return", color="Sharpe Ratio")
+    fdf     = r["frontier_df"]
+    best    = fdf.loc[fdf["Sharpe Ratio"].idxmax()]
+    low_vol = fdf.loc[fdf["Volatility"].idxmin()]
 
-    best    = r["frontier_df"].loc[r["frontier_df"]["Sharpe Ratio"].idxmax()]
-    low_vol = r["frontier_df"].loc[r["frontier_df"]["Volatility"].idxmin()]
+    fig_ef = go.Figure()
+
+    fig_ef.add_trace(go.Scatter(
+        x=fdf["Volatility"],
+        y=fdf["Return"],
+        mode="markers",
+        marker=dict(
+            color=fdf["Sharpe Ratio"],
+            colorscale="Viridis",
+            size=4,
+            opacity=0.6,
+            colorbar=dict(title="Sharpe Ratio"),
+        ),
+        name="Portfolios",
+        hovertemplate=(
+            "Return: %{y:.2%}<br>"
+            "Volatility: %{x:.2%}<extra></extra>"
+        ),
+    ))
+
+    for row, label, color in [
+        (best,    "Max Sharpe",    "gold"),
+        (low_vol, "Min Volatility","cyan"),
+    ]:
+        fig_ef.add_trace(go.Scatter(
+            x=[row["Volatility"]],
+            y=[row["Return"]],
+            mode="markers",
+            marker=dict(symbol="star", size=18, color=color),
+            name=label,
+            hovertemplate=(
+                f"<b>{label}</b><br>"
+                "Return: %{y:.2%}<br>"
+                "Volatility: %{x:.2%}<extra></extra>"
+            ),
+        ))
+
+    fig_ef.update_layout(
+        title="Efficient Frontier",
+        xaxis_title="Annualised Volatility",
+        yaxis_title="Annualised Return",
+        xaxis_tickformat=".0%",
+        yaxis_tickformat=".0%",
+    )
+    st.plotly_chart(fig_ef, use_container_width=True)
 
     col_a, col_b = st.columns(2)
     with col_a:
