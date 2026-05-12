@@ -107,7 +107,7 @@ if run_button:
     if isinstance(data, pd.Series):
         data = data.to_frame()
 
-    data = data.dropna()
+    data = data.ffill().dropna()
 
     missing_tickers = [ticker for ticker in tickers if ticker not in data.columns]
 
