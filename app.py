@@ -290,31 +290,31 @@ if run_button:
         color="Sharpe Ratio"
     )
 
-st.write("## Download Results")
+    st.write("## Download Results")
 
-summary_csv = summary_table.to_csv(index=False).encode("utf-8")
+    summary_csv = summary_table.to_csv(index=False).encode("utf-8")
 
-st.download_button(
-    label="Download Simulation Summary CSV",
-    data=summary_csv,
-    file_name="simulation_summary.csv",
-    mime="text/csv"
-)
+    st.download_button(
+        label="Download Simulation Summary CSV",
+        data=summary_csv,
+        file_name="simulation_summary.csv",
+        mime="text/csv"
+    )
 
-frontier_csv = frontier_df.to_csv(index=False).encode("utf-8")
+    frontier_csv = frontier_df.to_csv(index=False).encode("utf-8")
 
-st.download_button(
-    label="Download Efficient Frontier CSV",
-    data=frontier_csv,
-    file_name="efficient_frontier.csv",
-    mime="text/csv"
-)
+    st.download_button(
+        label="Download Efficient Frontier CSV",
+        data=frontier_csv,
+        file_name="efficient_frontier.csv",
+        mime="text/csv"
+    )
 
-final_values_csv = final_values_table.to_csv(index=False).encode("utf-8")
+    final_values_csv = final_values_table.to_csv(index=False).encode("utf-8")
 
-st.download_button(
-    label="Download Final Values CSV",
-    data=final_values_csv,
-    file_name="final_values.csv",
-    mime="text/csv"
-)
+    st.download_button(
+        label="Download Final Values CSV",
+        data=final_values_csv,
+        file_name="final_values.csv",
+        mime="text/csv"
+    )
