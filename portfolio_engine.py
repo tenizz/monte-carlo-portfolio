@@ -274,7 +274,10 @@ def fit_garch(portfolio_returns):
     omega = float(result.params["omega"])       # in %² units
     alpha = float(result.params["alpha[1]"])
     beta  = float(result.params["beta[1]"])
-    mu    = float(result.params["Const"])       # daily mean in % units
+
+    # arch changed the mean parameter name between versions: "Const" → "mu"
+    mean_key = "mu" if "mu" in result.params.index else "Const"
+    mu = float(result.params[mean_key])         # daily mean in % units
 
     persistence   = alpha + beta
     # Long-run (unconditional) variance, converted back to decimal
