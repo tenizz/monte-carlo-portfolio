@@ -233,3 +233,143 @@ def calculate_simulation_metrics(
         "total_contributions": total_contributions,
         "summary_table":       summary_table,
     }
+
+
+# ------------------------------------------------------------------
+# GARCH(1,1)
+# ------------------------------------------------------------------
+
+def fit_garch(portfolio_returns):
+    """
+    Fit a GARCH(1,1) model to a portfolio return series.
+
+    GARCH(1,1) variance equation:
+        σ²_t = ω + α·ε²_{t-1} + β·σ²_{t-1}
+
+        ω (omega)  — base variance; floor that volatility reverts to
+        α (alpha)  — ARCH term; sensitivity to yesterday's shock
+        β (beta)   — GARCH term; persistence of yesterday's volatility
+        α + β      — total persistence; near 1 = long volatility memory
+
+    The arch library requires percentage returns for numerical stability,
+    so inputs are scaled ×100 before fitting and converted back after.
+
+    Parameters
+    ----------
+    portfolio_returns : array-like
+        Daily portfolio returns in decimal form (e.g. 0.012 for 1.2%).
+
+    Returns
+    -------
+    dict with fitted parameters, diagnostics, and conditional volatility series.
+    """
+    from arch import arch_model
+
+    # Scale to % for numerical stability in the optimizer
+    r_pct = np.asarray(portfolio_returns) * 100
+
+    model  = arch_model(r_pct, mean="Constant", vol="GARCH", p=1, q=1, dist="Normal")
+    result = model.fit(disp="off")
+
+    omega = float(result.params["omega"])       # in %² units
+    alpha = float(result.params["alpha[1]"])
+    beta  = float(result.params["beta[1]"])
+    mu    = float(result.params["Const"])       # daily mean in % units
+
+    persistence   = alpha + beta
+    # Long-run (unconditional) variance, converted back to decimal
+    long_run_vol_daily  = np.sqrt(omega / (1 - persistence)) / 100
+    long_run_vol_annual = long_run_vol_daily * np.sqrt(252)
+
+    # Last conditional variance in decimal² (seed for simulation)
+    last_cond_vol_pct = float(result.conditional_volatility.iloc[-1])
+    last_var_decimal  = (last_cond_vol_pct / 100) ** 2
+
+    # Conditional volatility series annualised for charting
+    cond_vol_annual = (result.conditional_volatility / 100) * np.sqrt(252)
+
+    return {
+        "omega":               omega,
+        "alpha":               alpha,
+        "beta":                beta,
+        "mu":                  mu / 100,           # back to decimal
+        "persistence":         persistence,
+        "long_run_vol_annual": long_run_vol_annual,
+        "last_var_decimal":    last_var_decimal,
+        "cond_vol_annual":     pd.Series(
+            cond_vol_annual.values,
+            index=result.conditional_volatility.index
+        ),
+        "aic":                 result.aic,
+        "bic":                 result.bic,
+    }
+
+
+def run_garch_simulation(
+        garch_params,
+        initial_investment,
+        monthly_contribution,
+        years,
+        simulations,
+        trading_days=252
+):
+    """
+    Monte Carlo simulation using GARCH(1,1) time-varying volatility.
+
+    Because σ²_t depends on r_{t-1} (previous day's actual return),
+    the day axis must remain sequential — it cannot be collapsed into
+    a single cumprod like the constant-vol engine.
+
+    The outer loop runs over days (≤ 10,080 iterations for 40 years),
+    but every operation inside is a NumPy ufunc over the full
+    simulations vector, so wall-clock time stays acceptable.
+
+    Random innovations z ~ N(0,1) are pre-generated in one shot as a
+    (days, simulations) matrix before the loop starts.
+
+    Parameters
+    ----------
+    garch_params : dict
+        Output of fit_garch().
+    initial_investment, monthly_contribution, years, simulations : numeric
+    trading_days : int
+
+    Returns
+    -------
+    portfolio_results : np.ndarray, shape (days, simulations)
+    final_values      : np.ndarray, shape (simulations,)
+    """
+    days = years * trading_days
+    rng  = np.random.default_rng()
+
+    # GARCH parameters in decimal units
+    omega = garch_params["omega"] / 10000       # ω was fitted on % returns → ÷ 10000
+    alpha = garch_params["alpha"]
+    beta  = garch_params["beta"]
+    mu    = garch_params["mu"]                  # daily mean return in decimal
+
+    # Pre-generate all standard-normal innovations: shape (days, simulations)
+    z = rng.standard_normal((days, simulations))
+
+    # Seed each simulation's variance with the last observed conditional variance
+    sigma2 = np.full(simulations, garch_params["last_var_decimal"])
+
+    portfolio_values  = np.full(simulations, float(initial_investment))
+    portfolio_results = np.zeros((days, simulations))
+
+    for t in range(days):
+        # Daily return: r_t = μ + σ_t · z_t  (vectorized over all simulations)
+        r = mu + np.sqrt(sigma2) * z[t]
+        r = np.maximum(-1.0, r)                 # floor: portfolio can't go below 0
+
+        portfolio_values = portfolio_values * (1.0 + r)
+
+        if t % 21 == 0 and t != 0:
+            portfolio_values += monthly_contribution
+
+        portfolio_results[t] = portfolio_values
+
+        # GARCH variance update: σ²_t+1 = ω + α·r²_t + β·σ²_t
+        sigma2 = omega + alpha * r ** 2 + beta * sigma2
+
+    return portfolio_results, portfolio_results[-1]

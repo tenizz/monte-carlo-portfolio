@@ -9,6 +9,8 @@ from portfolio_engine import (
     run_monte_carlo_simulation,
     calculate_efficient_frontier,
     calculate_simulation_metrics,
+    fit_garch,
+    run_garch_simulation,
 )
 
 # ------------------------------------------------------------------
@@ -31,9 +33,22 @@ st.caption("Analyze portfolio risk, return, downside scenarios, and future outco
 @st.cache_data
 def download_price_data(tickers_tuple):
     tickers = list(tickers_tuple)
-    data = yf.download(tickers, start="2015-01-01")["Close"]
+    raw = yf.download(tickers, start="2015-01-01", progress=False, auto_adjust=True)
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    # yfinance 1.x returns MultiIndex columns (field, ticker) for multi-ticker downloads
+    if isinstance(raw.columns, pd.MultiIndex):
+        data = raw["Close"]
+    else:
+        # single ticker returns flat columns
+        data = raw[["Close"]] if "Close" in raw.columns else raw
+
     if isinstance(data, pd.Series):
         data = data.to_frame()
+        data.columns = tickers
+
     data = data.ffill().dropna()
     return data
 
@@ -170,6 +185,32 @@ if run_button:
             num_random_portfolios=3000,
         )
 
+    # ------------------------------------------------------------------
+    # GARCH(1,1) — fit on historical portfolio returns, then simulate
+    # ------------------------------------------------------------------
+
+    portfolio_returns_hist = daily_returns @ weights
+
+    with st.spinner("Fitting GARCH(1,1) model..."):
+        garch_params = fit_garch(portfolio_returns_hist)
+
+    with st.spinner("Running GARCH simulation..."):
+        garch_results, garch_final_values = run_garch_simulation(
+            garch_params=garch_params,
+            initial_investment=initial_investment,
+            monthly_contribution=monthly_contribution,
+            years=years,
+            simulations=simulations,
+            trading_days=trading_days,
+        )
+
+    garch_metrics = calculate_simulation_metrics(
+        final_values=garch_final_values,
+        initial_investment=initial_investment,
+        monthly_contribution=monthly_contribution,
+        years=years,
+    )
+
     # Build CSV bytes once now — not inside download buttons —
     # so clicking a button doesn't trigger recomputation
     summary_csv  = metrics["summary_table"].to_csv(index=False).encode("utf-8")
@@ -182,19 +223,23 @@ if run_button:
 
     # Store everything — persists across all reruns until next Run click
     st.session_state["results"] = {
-        "tickers":           tickers,
-        "mode":              mode,
-        "years":             years,
-        "simulations":       simulations,
-        "data":              data,
-        "daily_returns":     daily_returns,
-        "portfolio_results": portfolio_results,
-        "final_values":      final_values,
-        "metrics":           metrics,
-        "frontier_df":       frontier_df,
-        "summary_csv":       summary_csv,
-        "frontier_csv":      frontier_csv,
-        "values_csv":        values_csv,
+        "tickers":             tickers,
+        "mode":                mode,
+        "years":               years,
+        "simulations":         simulations,
+        "data":                data,
+        "daily_returns":       daily_returns,
+        "portfolio_results":   portfolio_results,
+        "final_values":        final_values,
+        "metrics":             metrics,
+        "frontier_df":         frontier_df,
+        "garch_params":        garch_params,
+        "garch_results":       garch_results,
+        "garch_final_values":  garch_final_values,
+        "garch_metrics":       garch_metrics,
+        "summary_csv":         summary_csv,
+        "frontier_csv":        frontier_csv,
+        "values_csv":          values_csv,
     }
 
 # ------------------------------------------------------------------
@@ -211,8 +256,8 @@ m = r["metrics"]
 
 st.success("Simulation complete.")
 
-tab_results, tab_charts, tab_frontier, tab_data = st.tabs([
-    "Results", "Charts", "Efficient Frontier", "Raw Data & Export"
+tab_results, tab_charts, tab_frontier, tab_garch, tab_data = st.tabs([
+    "Results", "Charts", "Efficient Frontier", "GARCH", "Raw Data & Export"
 ])
 
 # ── Tab 1: Results ───────────────────────────────────────────────
@@ -397,7 +442,186 @@ with tab_frontier:
         st.metric("Min Vol — Volatility", f"{low_vol['Volatility']:.2%}")
         st.metric("Min Vol Sharpe Ratio", f"{low_vol['Sharpe Ratio']:.2f}")
 
-# ── Tab 4: Raw Data & Export ──────────────────────────────────────
+# ── Tab 4: GARCH ─────────────────────────────────────────────────
+with tab_garch:
+
+    gp = r["garch_params"]
+    gm = r["garch_metrics"]
+
+    st.subheader("GARCH(1,1) Model")
+    st.caption(
+        "Volatility is modelled as time-varying: large moves tend to "
+        "cluster together. GARCH captures this; constant-vol simulation does not."
+    )
+
+    # ── Parameters ──────────────────────────────────────────────────
+    st.markdown("#### Fitted Parameters")
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("ω (omega)",   f"{gp['omega']:.6f}",
+                  help="Base variance — the floor volatility reverts to")
+        st.metric("AIC", f"{gp['aic']:.1f}")
+    with col2:
+        st.metric("α (alpha)",   f"{gp['alpha']:.4f}",
+                  help="ARCH term — sensitivity to yesterday's shock")
+        st.metric("BIC", f"{gp['bic']:.1f}")
+    with col3:
+        st.metric("β (beta)",    f"{gp['beta']:.4f}",
+                  help="GARCH term — persistence of yesterday's volatility")
+    with col4:
+        st.metric("α + β (persistence)", f"{gp['persistence']:.4f}",
+                  help="Near 1 = long volatility memory; above 1 = non-stationary")
+        st.metric("Long-run Annual Vol",  f"{gp['long_run_vol_annual']:.2%}",
+                  help="Unconditional volatility the model reverts to")
+
+    st.divider()
+
+    # ── Historical conditional volatility ───────────────────────────
+    st.markdown("#### Historical Conditional Volatility (Annualised)")
+    st.caption(
+        "Spikes show volatility clustering — periods of turbulence followed "
+        "by more turbulence. A constant-vol model misses this entirely."
+    )
+
+    fig_vol = go.Figure()
+    fig_vol.add_trace(go.Scatter(
+        x=gp["cond_vol_annual"].index,
+        y=gp["cond_vol_annual"].values,
+        mode="lines",
+        line=dict(width=1, color="#00b4d8"),
+        name="Conditional Volatility",
+        fill="tozeroy",
+        fillcolor="rgba(0,180,216,0.15)",
+    ))
+    fig_vol.add_hline(
+        y=gp["long_run_vol_annual"],
+        line_dash="dash",
+        line_color="orange",
+        annotation_text="Long-run vol",
+        annotation_position="bottom right",
+    )
+    fig_vol.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Annualised Volatility",
+        yaxis_tickformat=".0%",
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_vol, use_container_width=True)
+
+    st.divider()
+
+    # ── GARCH vs Standard simulation comparison ──────────────────────
+    st.markdown("#### GARCH vs Standard Simulation")
+
+    # Downsampled paths for both
+    total_days = r["garch_results"].shape[0]
+    step    = max(1, total_days // 500)
+    n_paths = 30
+
+    fig_compare = go.Figure()
+
+    # Standard paths
+    std_paths = r["portfolio_results"][::step, :n_paths]
+    for i in range(n_paths):
+        fig_compare.add_trace(go.Scatter(
+            y=std_paths[:, i],
+            mode="lines",
+            line=dict(width=0.5, color="#4cc9f0"),
+            opacity=0.3,
+            showlegend=(i == 0),
+            name="Standard (constant vol)",
+            hoverinfo="skip",
+            legendgroup="standard",
+        ))
+
+    # GARCH paths
+    garch_paths = r["garch_results"][::step, :n_paths]
+    for i in range(n_paths):
+        fig_compare.add_trace(go.Scatter(
+            y=garch_paths[:, i],
+            mode="lines",
+            line=dict(width=0.5, color="#f72585"),
+            opacity=0.3,
+            showlegend=(i == 0),
+            name="GARCH (time-varying vol)",
+            hoverinfo="skip",
+            legendgroup="garch",
+        ))
+
+    # Median overlays
+    std_median   = np.median(r["portfolio_results"][::step, :], axis=1)
+    garch_median = np.median(r["garch_results"][::step, :],     axis=1)
+
+    fig_compare.add_trace(go.Scatter(
+        y=std_median, mode="lines",
+        line=dict(width=2.5, color="#4cc9f0", dash="dash"),
+        name="Standard median", legendgroup="standard",
+    ))
+    fig_compare.add_trace(go.Scatter(
+        y=garch_median, mode="lines",
+        line=dict(width=2.5, color="#f72585", dash="dash"),
+        name="GARCH median", legendgroup="garch",
+    ))
+
+    fig_compare.update_layout(
+        title="Simulation Paths: Standard vs GARCH",
+        xaxis_title="Sampled Trading Days",
+        yaxis_title="Portfolio Value ($)",
+        hovermode="x",
+    )
+    st.plotly_chart(fig_compare, use_container_width=True)
+
+    # ── Distribution comparison ──────────────────────────────────────
+    st.markdown("#### Final Value Distribution: Standard vs GARCH")
+    st.caption(
+        "GARCH typically produces fatter tails — more extreme outcomes "
+        "in both directions — because volatility can spike suddenly."
+    )
+
+    fig_dist = go.Figure()
+    fig_dist.add_trace(go.Histogram(
+        x=r["final_values"],
+        nbinsx=60, opacity=0.6,
+        name="Standard", marker_color="#4cc9f0",
+    ))
+    fig_dist.add_trace(go.Histogram(
+        x=r["garch_final_values"],
+        nbinsx=60, opacity=0.6,
+        name="GARCH", marker_color="#f72585",
+    ))
+    fig_dist.update_layout(
+        barmode="overlay",
+        xaxis_title="Final Portfolio Value ($)",
+        yaxis_title="Frequency",
+        title="Final Value Distributions",
+    )
+    st.plotly_chart(fig_dist, use_container_width=True)
+
+    # ── Side-by-side metrics ─────────────────────────────────────────
+    st.markdown("#### Key Metrics: Standard vs GARCH")
+
+    col_std, col_g = st.columns(2)
+    std_m = r["metrics"]
+
+    with col_std:
+        st.markdown("**Standard Simulation**")
+        st.metric("Median Final Value", f"${std_m['median_final']:,.0f}")
+        st.metric("CVaR 5%",            f"${std_m['cvar_5']:,.0f}")
+        st.metric("Prob. of Loss",       f"{std_m['prob_loss']:.1%}")
+        st.metric("95th Percentile",     f"${std_m['percentile_95']:,.0f}")
+
+    with col_g:
+        st.markdown("**GARCH Simulation**")
+        st.metric("Median Final Value", f"${gm['median_final']:,.0f}",
+                  delta=f"{gm['median_final'] - std_m['median_final']:+,.0f}")
+        st.metric("CVaR 5%",            f"${gm['cvar_5']:,.0f}",
+                  delta=f"{gm['cvar_5'] - std_m['cvar_5']:+,.0f}")
+        st.metric("Prob. of Loss",       f"{gm['prob_loss']:.1%}")
+        st.metric("95th Percentile",     f"${gm['percentile_95']:,.0f}",
+                  delta=f"{gm['percentile_95'] - std_m['percentile_95']:+,.0f}")
+
+# ── Tab 5: Raw Data & Export ──────────────────────────────────────
 with tab_data:
 
     st.subheader("Daily Returns Preview")
