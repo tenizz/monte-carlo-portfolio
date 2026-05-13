@@ -300,14 +300,11 @@ def fit_garch(portfolio_returns):
         "omega":               omega,
         "alpha":               alpha,
         "beta":                beta,
-        "mu":                  mu / 100,           # back to decimal
+        "mu":                  mu / 100,
         "persistence":         persistence,
         "long_run_vol_annual": long_run_vol_annual,
         "last_var_decimal":    last_var_decimal,
-        "cond_vol_annual":     pd.Series(
-            cond_vol_annual.values,
-            index=result.conditional_volatility.index
-        ),
+        "cond_vol_annual":     cond_vol_annual,
         "aic":                 result.aic,
         "bic":                 result.bic,
     }
