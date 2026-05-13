@@ -285,11 +285,16 @@ def fit_garch(portfolio_returns):
     long_run_vol_annual = long_run_vol_daily * np.sqrt(252)
 
     # Last conditional variance in decimal² (seed for simulation)
-    last_cond_vol_pct = float(result.conditional_volatility.iloc[-1])
+    # arch returns conditional_volatility as ndarray in newer versions
+    cond_vol_raw = np.asarray(result.conditional_volatility)
+    last_cond_vol_pct = float(cond_vol_raw[-1])
     last_var_decimal  = (last_cond_vol_pct / 100) ** 2
 
     # Conditional volatility series annualised for charting
-    cond_vol_annual = (result.conditional_volatility / 100) * np.sqrt(252)
+    cond_vol_annual = pd.Series(
+        (cond_vol_raw / 100) * np.sqrt(252),
+        index=portfolio_returns.index if hasattr(portfolio_returns, "index") else None,
+        )
 
     return {
         "omega":               omega,
